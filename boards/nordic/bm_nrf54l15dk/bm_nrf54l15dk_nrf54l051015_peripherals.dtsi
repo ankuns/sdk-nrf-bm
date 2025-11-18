@@ -31,7 +31,7 @@
 /delete-node/ &i2c22;
 /delete-node/ &i2c30;
 /delete-node/ &i2s20;
-/delete-node/ &nfct;
+/* /delete-node/ &nfct; */
 /delete-node/ &pdm20;
 /delete-node/ &pdm21;
 /delete-node/ &pinctrl;
