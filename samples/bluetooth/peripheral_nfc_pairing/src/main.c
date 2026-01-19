@@ -17,6 +17,9 @@
 
 #include <bm/bluetooth/ble_adv.h>
 
+#include <bm/bluetooth/services/ble_dis.h>
+
+
 #include <bm/bluetooth/peer_manager/nrf_ble_lesc.h>
 #include <bm/bluetooth/peer_manager/peer_manager.h>
 #include <bm/bluetooth/peer_manager/peer_manager_handler.h>
@@ -498,9 +501,15 @@ int main(void)
 		goto fail;
 	}
 
-	// ble_uuid_t adv_uuid_list[] = {
-	// 	{ .uuid = BLE_UUID_HUMAN_INTERFACE_DEVICE_SERVICE, .type = BLE_UUID_TYPE_BLE },
-	// };
+	struct ble_dis_config dis_config = {
+		.sec_mode = BLE_DIS_CONFIG_SEC_MODE_DEFAULT,
+	};
+
+	nrf_err = ble_dis_init(&dis_config);
+	if (nrf_err) {
+		LOG_ERR("Failed to initialize device information service, nrf_error %#x", nrf_err);
+		goto fail;
+	}
 
 	struct ble_adv_config ble_adv_cfg = {
 		.conn_cfg_tag = CONFIG_NRF_SDH_BLE_CONN_TAG,
@@ -510,10 +519,6 @@ int main(void)
 			.flags = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE,
 
 		},
-		// .sr_data.uuid_lists.complete = {
-		// 	.uuid = &adv_uuid_list[0],
-		// 	.len = ARRAY_SIZE(adv_uuid_list),
-		// }
 	};
 
 	nrf_err = ble_adv_init(&ble_adv, &ble_adv_cfg);
@@ -521,8 +526,6 @@ int main(void)
 		LOG_ERR("Failed to initialize BLE advertising, nrf_error %#x", nrf_err);
 		goto fail;
 	}
-
-
 
 	/* Set up NFC */
 	if (nfc_t4t_setup(nfc_callback, NULL) < 0) {
@@ -549,6 +552,16 @@ int main(void)
 		goto fail;
 	}
 	LOG_INF("NFC configuration done");
+
+#if (0)
+	nrf_err = advertising_start(false);
+	if (nrf_err) {
+		LOG_ERR("Failed to start advertising, nrf_error %#x", nrf_err);
+		goto fail;
+	}
+
+	LOG_INF("Advertising as %s", CONFIG_BLE_ADV_NAME);
+#endif
 
 fail:
 	/* Main loop */
