@@ -12,9 +12,8 @@
 #include <nfc/ndef/msg.h>
 #include <nfc/ndef/text_rec.h>
 
-#if defined(CONFIG_SOFTDEVICE)
 #include <bm/softdevice_handler/nrf_sdh.h>
-#endif
+#include <bm/softdevice_handler/nrf_sdh_ble.h>
 
 #include <hal/nrf_gpio.h>
 
@@ -166,28 +165,31 @@ int main(void)
 {
 	uint32_t len = sizeof(ndef_msg_buf);
 
-	LOG_INF("Starting NFC Text Record sample for Type 4 Tag");
+	LOG_INF("Starting Peripheral NFC Pairing sample");
 
 	/* Configure LED-pins as outputs */
 	led_init();
 
-#if defined(CONFIG_SOFTDEVICE)
-	/* From samples/bluetooth/hello_softdevice.
-	 * To be able to control HFCLK through SoftDevice what is required by
-	 * CONFIG_BM_NFC_PLATFORM the SoftDevice needs to be enabled prior to
-	 * NFC field detection start.
-	 */
 	int err = nrf_sdh_enable_request();
-
 	if (err) {
 		LOG_ERR("Failed to enable SoftDevice, err %d", err);
 		goto fail;
 	}
 
 	LOG_INF("SoftDevice enabled");
-	while (LOG_PROCESS()) {
+
+	err = nrf_sdh_ble_enable(CONFIG_NRF_SDH_BLE_CONN_TAG);
+	if (err) {
+		LOG_ERR("Failed to enable BLE, err %d", err);
+		goto fail;
 	}
-#endif /* defined(CONFIG_SOFTDEVICE) */
+
+	LOG_INF("Bluetooth is enabled!");
+
+
+
+
+
 
 	/* Set up NFC */
 	if (nfc_t4t_setup(nfc_callback, NULL) < 0) {
