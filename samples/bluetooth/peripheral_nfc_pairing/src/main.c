@@ -54,6 +54,8 @@ LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
 /* BLE Advertising library instance */
 BLE_ADV_DEF(ble_adv);
 
+/* BLE Connection handle */
+static uint16_t conn_handle = BLE_CONN_HANDLE_INVALID;
 /* Peer ID */
 static uint16_t peer_id;
 
@@ -335,6 +337,59 @@ static uint32_t peer_manager_init(void)
 
 	return NRF_SUCCESS;
 }
+
+static void on_ble_evt(const ble_evt_t *evt, void *ctx)
+{
+	// uint32_t nrf_err;
+
+	switch (evt->header.evt_id) {
+	case BLE_GAP_EVT_CONNECTED:
+		LOG_INF("Peer connected");
+		conn_handle = evt->evt.gap_evt.conn_handle;
+
+		// nrf_err = ble_qwr_conn_handle_assign(&ble_qwr, conn_handle);
+		// if (nrf_err) {
+		// 	LOG_ERR("Failed to assign qwr handle, nrf_error %#x", nrf_err);
+		// 	return;
+		// }
+		// nrf_gpio_pin_write(BOARD_PIN_LED_0, !BOARD_LED_ACTIVE_STATE);
+		// nrf_gpio_pin_write(BOARD_PIN_LED_1, BOARD_LED_ACTIVE_STATE);
+		break;
+
+	case BLE_GAP_EVT_DISCONNECTED:
+		LOG_INF("Peer disconnected, reason %d",
+			evt->evt.gap_evt.params.disconnected.reason);
+
+		if (conn_handle == evt->evt.gap_evt.conn_handle) {
+			conn_handle = BLE_CONN_HANDLE_INVALID;
+		}
+		// nrf_gpio_pin_write(BOARD_PIN_LED_1, !BOARD_LED_ACTIVE_STATE);
+		// report_fifo_clear();
+		break;
+
+	case BLE_GAP_EVT_PASSKEY_DISPLAY:
+		LOG_INF("Passkey: %.*s", BLE_GAP_PASSKEY_LEN,
+			evt->evt.gap_evt.params.passkey_display.passkey);
+		if (evt->evt.gap_evt.params.passkey_display.match_request) {
+			LOG_INF("Pairing request, press button 0 to accept or button 1 to reject.");
+			// auth_key_request = true;
+		}
+		break;
+
+	case BLE_GAP_EVT_AUTH_KEY_REQUEST:
+		LOG_INF("Pairing request, press button 0 to accept or button 1 to reject.");
+		// auth_key_request = true;
+		break;
+
+	case BLE_GATTS_EVT_HVN_TX_COMPLETE:
+		// report_fifo_process();
+		break;
+
+	default:
+		break;
+	}
+}
+NRF_SDH_BLE_OBSERVER(sdh_ble, on_ble_evt, NULL, USER_LOW);
 
 static void ble_adv_evt_handler(struct ble_adv *ble_adv, const struct ble_adv_evt *evt)
 {
