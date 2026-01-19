@@ -15,6 +15,13 @@
 #include <bm/softdevice_handler/nrf_sdh.h>
 #include <bm/softdevice_handler/nrf_sdh_ble.h>
 
+#include <bm/bluetooth/ble_adv.h>
+
+#include <bm/bluetooth/peer_manager/nrf_ble_lesc.h>
+#include <bm/bluetooth/peer_manager/peer_manager.h>
+#include <bm/bluetooth/peer_manager/peer_manager_handler.h>
+
+
 #include <hal/nrf_gpio.h>
 
 #include <board-config.h>
@@ -25,6 +32,31 @@ LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
 #define NDEF_MSG_BUF_SIZE	128
 
 #define NFC_FIELD_LED		BOARD_PIN_LED_0
+
+
+/* Perform bonding. */
+#define SEC_PARAM_BOND 1
+/* Man In The Middle protection not required. */
+#define SEC_PARAM_MITM 0
+/* LE Secure Connections enabled. */
+#define SEC_PARAM_LESC 1
+/* Keypress notifications not enabled. */
+#define SEC_PARAM_KEYPRESS 1
+/* No I/O capabilities. */
+#define SEC_PARAM_IO_CAPABILITIES BLE_GAP_IO_CAPS_DISPLAY_YESNO
+/* Out Of Band data not available. */
+#define SEC_PARAM_OOB 0
+/* Minimum encryption key size. */
+#define SEC_PARAM_MIN_KEY_SIZE 7
+/* Maximum encryption key size. */
+#define SEC_PARAM_MAX_KEY_SIZE 16
+
+/* BLE Advertising library instance */
+BLE_ADV_DEF(ble_adv);
+
+/* Peer ID */
+static uint16_t peer_id;
+
 
 /* Text message in English with its language code. */
 static const uint8_t en_payload[] = {
@@ -161,6 +193,150 @@ static int welcome_msg_encode(uint8_t *buffer, uint32_t *len)
 	return err;
 }
 
+static void allow_list_set(enum pm_peer_id_list_skip skip)
+{
+	uint32_t nrf_err;
+	uint16_t peer_ids[BLE_GAP_WHITELIST_ADDR_MAX_COUNT];
+	uint32_t peer_id_count = BLE_GAP_WHITELIST_ADDR_MAX_COUNT;
+
+	nrf_err = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
+	if (nrf_err) {
+		LOG_ERR("Failed to get peer id list, nrf_error %#x", nrf_err);
+	}
+
+	LOG_INF("Number of peers added to the allow list: %d, max %d",
+		peer_id_count, BLE_GAP_WHITELIST_ADDR_MAX_COUNT);
+
+	nrf_err = pm_allow_list_set(peer_ids, peer_id_count);
+	if (nrf_err) {
+		LOG_ERR("Failed to set allow list, nrf_error %#x", nrf_err);
+	}
+}
+
+// static void identities_set(enum pm_peer_id_list_skip skip)
+// {
+// 	uint32_t nrf_err;
+// 	uint16_t peer_ids[BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT];
+// 	uint32_t peer_id_count = BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT;
+
+// 	nrf_err = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
+// 	if (nrf_err) {
+// 		LOG_ERR("Failed to get peer id list, nrf_error %#x", nrf_err);
+// 	}
+
+// 	nrf_err = pm_device_identities_list_set(peer_ids, peer_id_count);
+// 	if (nrf_err) {
+// 		LOG_ERR("Failed to set peer manager identity list, nrf_error %#x", nrf_err);
+// 	}
+// }
+
+static void delete_bonds(void)
+{
+	uint32_t nrf_err;
+
+	LOG_INF("Erasing bonds");
+
+	nrf_err = pm_peers_delete();
+	if (nrf_err) {
+		LOG_ERR("Failed to delete peers, nrf_error %#x", nrf_err);
+	}
+}
+
+static uint32_t advertising_start(bool erase_bonds)
+{
+	uint32_t nrf_err = NRF_SUCCESS;
+
+	if (erase_bonds) {
+		delete_bonds();
+	} else {
+		allow_list_set(PM_PEER_ID_LIST_SKIP_NO_ID_ADDR);
+
+		nrf_err = ble_adv_start(&ble_adv, BLE_ADV_MODE_FAST);
+		if (nrf_err) {
+			LOG_ERR("Failed to start advertising, nrf_error %#x", nrf_err);
+		}
+	}
+
+	return nrf_err;
+}
+
+
+static void pm_evt_handler(const struct pm_evt *evt)
+{
+	pm_handler_on_pm_evt(evt);
+	pm_handler_disconnect_on_sec_failure(evt);
+	pm_handler_flash_clean(evt);
+
+	switch (evt->evt_id) {
+	case PM_EVT_CONN_SEC_SUCCEEDED:
+		peer_id = evt->peer_id;
+		break;
+
+	case PM_EVT_PEERS_DELETE_SUCCEEDED:
+		advertising_start(false);
+		break;
+
+	case PM_EVT_PEER_DATA_UPDATE_SUCCEEDED:
+		if (evt->params.peer_data_update_succeeded.flash_changed &&
+		    (evt->params.peer_data_update_succeeded.data_id == PM_PEER_DATA_ID_BONDING)) {
+			LOG_INF("New bond, add the peer to the allow list if possible");
+			/* Note: You should check on what kind of allow list policy your
+			 * application should use.
+			 */
+
+			allow_list_set(PM_PEER_ID_LIST_SKIP_NO_ID_ADDR);
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+static uint32_t peer_manager_init(void)
+{
+	ble_gap_sec_params_t sec_param;
+	uint32_t nrf_err;
+
+	nrf_err = pm_init();
+	if (nrf_err) {
+		return nrf_err;
+	}
+
+	memset(&sec_param, 0, sizeof(ble_gap_sec_params_t));
+
+	/* Security parameters to be used for all security procedures. */
+	sec_param = (ble_gap_sec_params_t) {
+		.bond = SEC_PARAM_BOND,
+		.mitm = SEC_PARAM_MITM,
+		.lesc = SEC_PARAM_LESC,
+		.keypress = SEC_PARAM_KEYPRESS,
+		.io_caps = SEC_PARAM_IO_CAPABILITIES,
+		.oob = SEC_PARAM_OOB,
+		.min_key_size = SEC_PARAM_MIN_KEY_SIZE,
+		.max_key_size = SEC_PARAM_MAX_KEY_SIZE,
+		.kdist_own.enc = 1,
+		.kdist_own.id = 1,
+		.kdist_peer.enc = 1,
+		.kdist_peer.id = 1,
+	};
+
+	nrf_err = pm_sec_params_set(&sec_param);
+	if (nrf_err) {
+		LOG_ERR("pm_sec_params_set() failed, nrf_error %#x", nrf_err);
+		return nrf_err;
+	}
+
+	nrf_err = pm_register(pm_evt_handler);
+	if (nrf_err) {
+		LOG_ERR("pm_register() failed, nrf_error %#x", nrf_err);
+		return nrf_err;
+	}
+
+	return NRF_SUCCESS;
+}
+
+
 int main(void)
 {
 	uint32_t len = sizeof(ndef_msg_buf);
@@ -186,8 +362,11 @@ int main(void)
 
 	LOG_INF("Bluetooth is enabled!");
 
-
-
+	uint32_t nrf_err = peer_manager_init();
+	if (nrf_err) {
+		LOG_ERR("Failed to initialize Peer Manager, nrf_error %x", nrf_err);
+		goto fail;
+	}
 
 
 
