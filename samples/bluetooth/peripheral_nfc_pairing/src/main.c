@@ -213,22 +213,22 @@ static void allow_list_set(enum pm_peer_id_list_skip skip)
 	}
 }
 
-// static void identities_set(enum pm_peer_id_list_skip skip)
-// {
-// 	uint32_t nrf_err;
-// 	uint16_t peer_ids[BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT];
-// 	uint32_t peer_id_count = BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT;
+static void identities_set(enum pm_peer_id_list_skip skip)
+{
+	uint32_t nrf_err;
+	uint16_t peer_ids[BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT];
+	uint32_t peer_id_count = BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT;
 
-// 	nrf_err = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
-// 	if (nrf_err) {
-// 		LOG_ERR("Failed to get peer id list, nrf_error %#x", nrf_err);
-// 	}
+	nrf_err = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
+	if (nrf_err) {
+		LOG_ERR("Failed to get peer id list, nrf_error %#x", nrf_err);
+	}
 
-// 	nrf_err = pm_device_identities_list_set(peer_ids, peer_id_count);
-// 	if (nrf_err) {
-// 		LOG_ERR("Failed to set peer manager identity list, nrf_error %#x", nrf_err);
-// 	}
-// }
+	nrf_err = pm_device_identities_list_set(peer_ids, peer_id_count);
+	if (nrf_err) {
+		LOG_ERR("Failed to set peer manager identity list, nrf_error %#x", nrf_err);
+	}
+}
 
 static void delete_bonds(void)
 {
@@ -336,6 +336,81 @@ static uint32_t peer_manager_init(void)
 	return NRF_SUCCESS;
 }
 
+static void ble_adv_evt_handler(struct ble_adv *ble_adv, const struct ble_adv_evt *evt)
+{
+	uint32_t nrf_err;
+	ble_gap_addr_t *peer_addr;
+	ble_gap_addr_t allow_list_addrs[BLE_GAP_WHITELIST_ADDR_MAX_COUNT];
+	ble_gap_irk_t allow_list_irks[BLE_GAP_WHITELIST_ADDR_MAX_COUNT];
+	uint32_t addr_cnt = BLE_GAP_WHITELIST_ADDR_MAX_COUNT;
+	uint32_t irk_cnt = BLE_GAP_WHITELIST_ADDR_MAX_COUNT;
+
+	switch (evt->evt_type) {
+	case BLE_ADV_EVT_ERROR:
+		LOG_ERR("Advertising error %#x", evt->error.reason);
+		break;
+	case BLE_ADV_EVT_DIRECTED_HIGH_DUTY:
+	case BLE_ADV_EVT_DIRECTED:
+	case BLE_ADV_EVT_FAST:
+	case BLE_ADV_EVT_SLOW:
+	case BLE_ADV_EVT_FAST_ALLOW_LIST:
+	case BLE_ADV_EVT_SLOW_ALLOW_LIST:
+		// nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
+		break;
+	case BLE_ADV_EVT_IDLE:
+		// nrf_gpio_pin_write(BOARD_PIN_LED_0, !BOARD_LED_ACTIVE_STATE);
+		break;
+	case BLE_ADV_EVT_ALLOW_LIST_REQUEST:
+		nrf_err = pm_allow_list_get(allow_list_addrs, &addr_cnt, allow_list_irks, &irk_cnt);
+		if (nrf_err) {
+			LOG_ERR("Failed to get allow list, nrf_error %#x", nrf_err);
+		}
+		LOG_DBG("pm_allow_list_get returns %d addr in allow list and %d irk allow list",
+				addr_cnt, irk_cnt);
+
+		/* Set the correct identities list
+		 * (no excluding peers with no Central Address Resolution).
+		 */
+		identities_set(PM_PEER_ID_LIST_SKIP_NO_IRK);
+
+		nrf_err = ble_adv_allow_list_reply(ble_adv, allow_list_addrs, addr_cnt,
+						   allow_list_irks, irk_cnt);
+		if (nrf_err) {
+			LOG_ERR("Failed to set allow list, nrf_error %#x", nrf_err);
+		}
+		break;
+
+	case BLE_ADV_EVT_PEER_ADDR_REQUEST:
+		struct pm_peer_data_bonding peer_bonding_data;
+
+		/* Only Give peer address if we have a handle to the bonded peer. */
+		if (peer_id != PM_PEER_ID_INVALID) {
+			nrf_err = pm_peer_data_bonding_load(peer_id, &peer_bonding_data);
+			if (nrf_err != NRF_ERROR_NOT_FOUND) {
+				if (nrf_err) {
+					LOG_ERR("Failed to load bonding data, nrf_error %#x",
+						nrf_err);
+				}
+
+				/* Manipulate identities to exclude peers with no
+				 * Central Address Resolution.
+				 */
+				identities_set(PM_PEER_ID_LIST_SKIP_ALL);
+
+				peer_addr = &(peer_bonding_data.peer_ble_id.id_addr_info);
+				nrf_err = ble_adv_peer_addr_reply(ble_adv, peer_addr);
+				if (nrf_err) {
+					LOG_ERR("Failed to reply peer address, nrf_error %#x",
+						nrf_err);
+				}
+			}
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 
 int main(void)
 {
@@ -365,6 +440,30 @@ int main(void)
 	uint32_t nrf_err = peer_manager_init();
 	if (nrf_err) {
 		LOG_ERR("Failed to initialize Peer Manager, nrf_error %x", nrf_err);
+		goto fail;
+	}
+
+	// ble_uuid_t adv_uuid_list[] = {
+	// 	{ .uuid = BLE_UUID_HUMAN_INTERFACE_DEVICE_SERVICE, .type = BLE_UUID_TYPE_BLE },
+	// };
+
+	struct ble_adv_config ble_adv_cfg = {
+		.conn_cfg_tag = CONFIG_NRF_SDH_BLE_CONN_TAG,
+		.evt_handler = ble_adv_evt_handler,
+		.adv_data = {
+			.name_type = BLE_ADV_DATA_FULL_NAME,
+			.flags = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE,
+
+		},
+		// .sr_data.uuid_lists.complete = {
+		// 	.uuid = &adv_uuid_list[0],
+		// 	.len = ARRAY_SIZE(adv_uuid_list),
+		// }
+	};
+
+	nrf_err = ble_adv_init(&ble_adv, &ble_adv_cfg);
+	if (nrf_err) {
+		LOG_ERR("Failed to initialize BLE advertising, nrf_error %#x", nrf_err);
 		goto fail;
 	}
 
