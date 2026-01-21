@@ -5,4 +5,5 @@
 #
 
 add_subdirectory(lib)
+add_subdirectory(ndef)
 add_subdirectory(tnep)
