@@ -19,6 +19,22 @@ config BM_NFC_NDEF_CH_MSG
 	help
 	  Enable NDEF Connection Handover message generator library
 
+if BM_NFC_NDEF_CH_MSG
+
+config BM_NFC_NDEF_CH_MAJOR_VERSION
+	int "Connection Handover major version"
+	default 1
+	help
+	  The major version of the Connection Handover specification.
+
+config BM_NFC_NDEF_CH_MINOR_VERSION
+	int "Connection Handover minor version"
+	default 5
+	help
+	  The minor version of the Connection Handover specification.
+
+endif # BM_NFC_NDEF_CH_MSG
+
 endif # NFC_NDEF
 
 endif # NCS_BM

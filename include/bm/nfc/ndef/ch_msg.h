@@ -9,7 +9,7 @@
 
 /**@file
  *
- * @defgroup nfc_ndef_ch_msg NFC Connection Hanover messages
+ * @defgroup nfc_ndef_ch_msg NFC Connection Handover messages
  * @{
  *
  * @brief Generation of The Connection Handover NDEF messages.
@@ -26,8 +26,8 @@ extern "C" {
 #endif
 
 
-#define NFC_NDEF_CH_MSG_MAJOR_VER CONFIG_NFC_NDEF_CH_MAJOR_VERSION
-#define NFC_NDEF_CH_MSG_MINOR_VER CONFIG_NFC_NDEF_CH_MINOR_VERSION
+#define NFC_NDEF_CH_MSG_MAJOR_VER CONFIG_BM_NFC_NDEF_CH_MAJOR_VERSION
+#define NFC_NDEF_CH_MSG_MINOR_VER CONFIG_BM_NFC_NDEF_CH_MINOR_VERSION
 
 /** NFC NDEF Connection Handover message structure.
  *  This structure contains all needed records needed to
