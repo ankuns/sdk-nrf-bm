@@ -35,7 +35,7 @@
 LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
 
 #define MAX_REC_COUNT		3
-#define NDEF_MSG_BUF_SIZE	128
+#define NDEF_MSG_BUF_SIZE	256
 
 #define NFC_FIELD_LED		BOARD_PIN_LED_0
 
@@ -65,6 +65,9 @@ static uint16_t conn_handle = BLE_CONN_HANDLE_INVALID;
 /* Peer ID */
 static uint16_t peer_id;
 
+static ble_gap_lesc_oob_data_t *oob_local = NULL;
+static uint8_t tk_value[NFC_NDEF_LE_OOB_REC_TK_LEN];
+static const char device_name[] = CONFIG_BLE_ADV_NAME;
 
 /* Buffer used to hold an NFC NDEF message. */
 static uint8_t ndef_msg_buf[NDEF_MSG_BUF_SIZE];
@@ -84,6 +87,48 @@ static void nfc_field_led_off(void)
 {
 	nrf_gpio_pin_write(NFC_FIELD_LED, !BOARD_LED_ACTIVE_STATE);
 }
+
+static int tk_value_generate(void)
+{
+	int err = 0;
+
+#if (0)
+	err = bt_rand(tk_value, sizeof(tk_value));
+	if (err) {
+		printk("Random TK value generation failed: %d\n", err);
+	}
+#else
+	// TODO: generate a proper TK value, now just a fixed one for testing
+	memset(tk_value, 0x44, sizeof(tk_value));
+#endif
+
+	return err;
+}
+
+static uint32_t paring_key_generate(void)
+{
+	uint32_t nrf_err;
+
+	LOG_INF("Generating new pairing keys");
+
+	nrf_err = nrf_ble_lesc_keypair_generate();
+
+	if (nrf_err != NRF_SUCCESS) {
+		LOG_ERR("Error while generating LESC key pair: %d\n", nrf_err);
+		return nrf_err;
+	}
+
+	nrf_err = nrf_ble_lesc_own_oob_data_generate();
+	if (nrf_err != NRF_SUCCESS) {
+		LOG_ERR("Error while generating LESC own OOB data: %d\n", nrf_err);
+		return nrf_err;
+	}
+
+	oob_local = nrf_ble_lesc_own_oob_data_get();
+
+	return tk_value_generate();
+}
+
 
 static void nfc_callback(void *context,
 			 nfc_t4t_event_t event,
@@ -108,12 +153,104 @@ static void nfc_callback(void *context,
 	}
 }
 
-/**
- * @brief Function for encoding the NDEF file with text messages.
- */
-static int welcome_msg_encode(uint8_t *buffer, uint32_t *len)
+static int pairing_msg_generate(uint32_t *len)
+{
+	int err;
+	struct nfc_ndef_le_oob_rec_payload_desc rec_payload;
+	struct nfc_ndef_ch_msg_records ch_records;
+	uint32_t ndef_size = nfc_t4t_ndef_file_msg_size_get(*len);
+
+	NFC_NDEF_MSG_DEF(hs_msg, 2);
+
+	oob_local = nrf_ble_lesc_own_oob_data_get();
+	if (oob_local == NULL) {
+		LOG_ERR("Failed to get LESC own OOB data!");
+		return -EFAULT;
+	}
+
+	err = tk_value_generate();
+	if (err) {
+		return err;
+	}
+
+	memset(&rec_payload, 0, sizeof(rec_payload));
+
+	rec_payload.addr = &oob_local->addr;
+	rec_payload.le_sc_data = oob_local;
+	rec_payload.tk_value = tk_value;
+	rec_payload.local_name = device_name;
+	rec_payload.le_role = NFC_NDEF_LE_OOB_REC_LE_ROLE(
+		NFC_NDEF_LE_OOB_REC_LE_ROLE_PERIPH_ONLY);
+	// rec_payload.appearance = NFC_NDEF_LE_OOB_REC_APPEARANCE(
+	// 	CONFIG_BT_DEVICE_APPEARANCE);
+	rec_payload.flags = NFC_NDEF_LE_OOB_REC_FLAGS(BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED);
+
+	NFC_NDEF_LE_OOB_RECORD_DESC_DEF(oob_rec, '0', &rec_payload);
+	NFC_NDEF_CH_AC_RECORD_DESC_DEF(oob_ac, NFC_AC_CPS_ACTIVE, 1, "0", 0);
+	NFC_NDEF_CH_HS_RECORD_DESC_DEF(hs_rec, NFC_NDEF_CH_MSG_MAJOR_VER,
+				       NFC_NDEF_CH_MSG_MINOR_VER, 1);
+
+	ch_records.ac = &NFC_NDEF_CH_AC_RECORD_DESC(oob_ac);
+	ch_records.carrier = &NFC_NDEF_LE_OOB_RECORD_DESC(oob_rec);
+	ch_records.cnt = 1;
+
+	err = nfc_ndef_ch_msg_hs_create(&NFC_NDEF_MSG(hs_msg),
+					&NFC_NDEF_CH_RECORD_DESC(hs_rec),
+					&ch_records);
+	if (err) {
+		return err;
+	}
+
+	err = nfc_ndef_msg_encode(&NFC_NDEF_MSG(hs_msg),
+				  nfc_t4t_ndef_file_msg_get(ndef_msg_buf),
+				  &ndef_size);
+	if (err) {
+		return err;
+	}
+
+	err = nfc_t4t_ndef_file_encode(ndef_msg_buf, &ndef_size);
+	if (err) {
+		return err;
+	}
+
+	*len = ndef_size;
+
+	return 0;
+}
+
+static int nfc_init(void)
 {
 	int err = 0;
+	uint32_t len = sizeof(ndef_msg_buf);
+
+	/* Set up NFC */
+	err = nfc_t4t_setup(nfc_callback, NULL);
+	if (err) {
+		LOG_ERR("Cannot setup NFC T4T library!");
+		return err;
+	}
+
+	/* Prepare pairing message */
+	err = pairing_msg_generate(&len);
+	if (err) {
+		LOG_ERR("Cannot encode pairing message!");
+		return err;
+	}
+
+	/* Set created message as the NFC payload */
+	err = nfc_t4t_ndef_staticpayload_set(ndef_msg_buf, len);
+	if (err) {
+		LOG_ERR("Cannot set payload!");
+		return err;
+	}
+
+	/* Start sensing NFC field */
+	err = nfc_t4t_emulation_start();
+	if (err) {
+		LOG_ERR("Cannot start emulation!");
+		return err;
+	}
+	LOG_INF("NFC configuration done");
 
 	return err;
 }
@@ -392,7 +529,7 @@ static void ble_adv_evt_handler(struct ble_adv *ble_adv, const struct ble_adv_ev
 
 int main(void)
 {
-	uint32_t len = sizeof(ndef_msg_buf);
+	bool initialized = false;
 
 	LOG_INF("Starting Peripheral NFC Pairing sample");
 
@@ -416,7 +553,7 @@ int main(void)
 	LOG_INF("Bluetooth is enabled!");
 
 	uint32_t nrf_err = peer_manager_init();
-	if (nrf_err) {
+	if (nrf_err != NRF_SUCCESS) {
 		LOG_ERR("Failed to initialize Peer Manager, nrf_error %x", nrf_err);
 		goto fail;
 	}
@@ -426,7 +563,7 @@ int main(void)
 	};
 
 	nrf_err = ble_dis_init(&dis_config);
-	if (nrf_err) {
+	if (nrf_err != NRF_SUCCESS) {
 		LOG_ERR("Failed to initialize device information service, nrf_error %#x", nrf_err);
 		goto fail;
 	}
@@ -442,36 +579,22 @@ int main(void)
 	};
 
 	nrf_err = ble_adv_init(&ble_adv, &ble_adv_cfg);
-	if (nrf_err) {
+	if (nrf_err != NRF_SUCCESS) {
 		LOG_ERR("Failed to initialize BLE advertising, nrf_error %#x", nrf_err);
 		goto fail;
 	}
 
-	/* Set up NFC */
-	if (nfc_t4t_setup(nfc_callback, NULL) < 0) {
-		LOG_ERR("Cannot setup NFC T4T library!");
+	nrf_err = paring_key_generate();
+	if (nrf_err != NRF_SUCCESS) {
 		goto fail;
 	}
 
-
-	/* Encode welcome message */
-	if (welcome_msg_encode(ndef_msg_buf, &len) < 0) {
-		LOG_ERR("Cannot encode message!");
+	err = nfc_init();
+	if (err) {
 		goto fail;
 	}
 
-	/* Set created message as the NFC payload */
-	if (nfc_t4t_ndef_staticpayload_set(ndef_msg_buf, len) < 0) {
-		LOG_ERR("Cannot set payload!");
-		goto fail;
-	}
-
-	/* Start sensing NFC field */
-	if (nfc_t4t_emulation_start() < 0) {
-		LOG_ERR("Cannot start emulation!");
-		goto fail;
-	}
-	LOG_INF("NFC configuration done");
+	initialized = true;
 
 #if (0)
 	nrf_err = advertising_start(false);
@@ -487,6 +610,11 @@ fail:
 	/* Main loop */
 	while (true) {
 		while (LOG_PROCESS()) {
+		}
+
+		if (initialized) {
+			// nfc_tnep_tag_process();
+			// TODO: paring_key_process
 		}
 
 		/* Wait for an event. */
