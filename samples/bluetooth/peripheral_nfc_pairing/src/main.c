@@ -73,6 +73,9 @@ static const char device_name[] = CONFIG_BLE_ADV_NAME;
 static uint8_t ndef_msg_buf[NDEF_MSG_BUF_SIZE];
 
 
+static uint32_t advertising_start(bool erase_bonds);
+
+
 static void led_init(void)
 {
 	nrf_gpio_cfg_output(NFC_FIELD_LED);
@@ -147,6 +150,9 @@ static void nfc_callback(void *context,
 		break;
 	case NFC_T4T_EVENT_FIELD_OFF:
 		nfc_field_led_off();
+		break;
+	case NFC_T4T_EVENT_NDEF_READ:
+		advertising_start(false);
 		break;
 	default:
 		break;
@@ -609,6 +615,8 @@ int main(void)
 fail:
 	/* Main loop */
 	while (true) {
+		(void)nrf_ble_lesc_request_handler();
+
 		while (LOG_PROCESS()) {
 		}
 
