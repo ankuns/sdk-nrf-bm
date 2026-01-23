@@ -28,8 +28,8 @@
 #include <bm/bluetooth/peer_manager/peer_manager.h>
 #include <bm/bluetooth/peer_manager/peer_manager_handler.h>
 
+#include <bm/bm_buttons.h>
 #include <hal/nrf_gpio.h>
-
 #include <board-config.h>
 
 LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
@@ -39,6 +39,7 @@ LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
 
 #define NFC_FIELD_LED		BOARD_PIN_LED_0
 
+#define BUTTON_BOND_REMOVE_PIN	BOARD_PIN_BTN_3
 
 /* Perform bonding. */
 #define SEC_PARAM_BOND 1
@@ -47,9 +48,9 @@ LOG_MODULE_REGISTER(app, CONFIG_APP_BLE_PERIPHERAL_NFC_PAIRING_LOG_LEVEL);
 /* LE Secure Connections enabled. */
 #define SEC_PARAM_LESC 1
 /* Keypress notifications not enabled. */
-#define SEC_PARAM_KEYPRESS 1
+#define SEC_PARAM_KEYPRESS 0
 /* No I/O capabilities. */
-#define SEC_PARAM_IO_CAPABILITIES BLE_GAP_IO_CAPS_DISPLAY_YESNO
+#define SEC_PARAM_IO_CAPABILITIES BLE_GAP_IO_CAPS_NONE
 /* Out Of Band data not available. */
 #define SEC_PARAM_OOB 0
 /* Minimum encryption key size. */
@@ -527,6 +528,60 @@ static void ble_adv_evt_handler(struct ble_adv *ble_adv, const struct ble_adv_ev
 	}
 }
 
+static void bm_button_handler(uint8_t pin, uint8_t action)
+{
+	if (action == BM_BUTTONS_PRESS) {
+		switch (pin) {
+		case BUTTON_BOND_REMOVE_PIN:
+			delete_bonds();
+			break;
+
+		default:
+			break;
+		}
+	}
+}
+
+static int board_buttons_init(void)
+{
+	int err;
+
+	static const struct bm_buttons_config configs[4] = {
+		{
+			.pin_number = BOARD_PIN_BTN_0,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = bm_button_handler,
+		},
+		{
+			.pin_number = BOARD_PIN_BTN_1,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = bm_button_handler,
+		},
+		{
+			.pin_number = BOARD_PIN_BTN_2,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = bm_button_handler,
+		},
+		{
+			.pin_number = BOARD_PIN_BTN_3,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = bm_button_handler,
+		},
+	};
+
+	err = bm_buttons_init(configs, ARRAY_SIZE(configs), BM_BUTTONS_DETECTION_DELAY_MIN_US);
+	if (err) {
+		return err;
+	}
+
+	err = bm_buttons_enable();
+
+	return err;
+}
 
 int main(void)
 {
@@ -537,7 +592,13 @@ int main(void)
 	/* Configure LED-pins as outputs */
 	led_init();
 
-	int err = nrf_sdh_enable_request();
+	int err = board_buttons_init();
+	if (err) {
+		LOG_ERR("Buttons init error %d", err);
+		goto fail;
+	}
+
+	err = nrf_sdh_enable_request();
 	if (err) {
 		LOG_ERR("Failed to enable SoftDevice, err %d", err);
 		goto fail;
