@@ -15,6 +15,7 @@
 #include <bm/nfc/ndef/ch_msg.h>
 #include <bm/nfc/ndef/le_oob_rec.h>
 
+#include <nrf_soc.h>
 #include <bm/softdevice_handler/nrf_sdh.h>
 #include <bm/softdevice_handler/nrf_sdh_ble.h>
 
@@ -26,7 +27,6 @@
 #include <bm/bluetooth/peer_manager/nrf_ble_lesc.h>
 #include <bm/bluetooth/peer_manager/peer_manager.h>
 #include <bm/bluetooth/peer_manager/peer_manager_handler.h>
-
 
 #include <hal/nrf_gpio.h>
 
@@ -93,19 +93,14 @@ static void nfc_field_led_off(void)
 
 static int tk_value_generate(void)
 {
-	int err = 0;
+	uint32_t nrf_err = sd_rand_application_vector_get(tk_value, sizeof(tk_value));
 
-#if (0)
-	err = bt_rand(tk_value, sizeof(tk_value));
-	if (err) {
-		printk("Random TK value generation failed: %d\n", err);
+	if (nrf_err != NRF_SUCCESS) {
+		LOG_ERR("Random TK value generation failed: %d\n", nrf_err);
+		return -EFAULT;
 	}
-#else
-	// TODO: generate a proper TK value, now just a fixed one for testing
-	memset(tk_value, 0x44, sizeof(tk_value));
-#endif
 
-	return err;
+	return 0;
 }
 
 static uint32_t paring_key_generate(void)
